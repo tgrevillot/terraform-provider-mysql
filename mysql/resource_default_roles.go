@@ -45,6 +45,12 @@ func resourceDefaultRoles() *schema.Resource {
 				},
 				Set: schema.HashString,
 			},
+
+			"use_set_role_statement": {
+				Type:	  schema.TypeBool,
+				Optional: true,
+				Default:  false
+			},
 		},
 	}
 }
@@ -57,21 +63,33 @@ func checkDefaultRolesSupport(ctx context.Context, meta interface{}) error {
 	return nil
 }
 
-func alterUserDefaultRoles(ctx context.Context, db *sql.DB, user, host string, roles []string) error {
-	var stmtSQL string
+func alterUserDefaultRoles(ctx context.Context, db *sql.DB, user, host string, roles []string, preferred_set_default_role_statement bool) error {
+	var stmtSQL []string
 
-	stmtSQL = fmt.Sprintf("ALTER USER '%s'@'%s' DEFAULT ROLE ", user, host)
-
-	if len(roles) > 0 {
-		stmtSQL += fmt.Sprintf("'%s'", strings.Join(roles, "', '"))
+	if preferred_set_default_role_statement {
+		if(len(roles) > 0) {
+			//REVIEW: Iterating here on roles but only one can be set with mariaDB. Useful for MySQL thought. 
+			for(i = 0; i < len(roles); i++) {
+				stmtSQL = append(stmtSQL, fmt.Sprintf("SET DEFAULT ROLE %s FOR USER '%s'@'%s'", roles[i], user, host))
+			}
+		} else {
+			stmtSQL = append(fmt.Sprintf("SET DEFAULT ROLE NONE FOR USER '%s'@'%s'", user, host)
+		}
 	} else {
-		stmtSQL += "NONE"
+		stmtSQL = append(stmtSQL, fmt.Sprintf("ALTER USER '%s'@'%s' DEFAULT ROLE ", user, host))
+		if len(roles) > 0 {
+			stmtSQL[0] += fmt.Sprintf("'%s'", strings.Join(roles, "', '"))
+		} else {
+			stmtSQL[0] += "NONE"
+		}
 	}
 
-	log.Println("[DEBUG] Executing statement:", stmtSQL)
-	_, err := db.ExecContext(ctx, stmtSQL)
-	if err != nil {
-		return fmt.Errorf("failed executing SQL: %w", err)
+	for i = 0; i < len(stmtSQL); i++) {
+		log.Println("[DEBUG] Executing statement:", stmtSQL[i])
+		_, err := db.ExecContext(ctx, stmtSQL[i])
+		if err != nil {
+			return fmt.Errorf("failed executing SQL: %w", err)
+		}
 	}
 
 	return nil
@@ -99,8 +117,9 @@ func CreateDefaultRoles(ctx context.Context, d *schema.ResourceData, meta interf
 	user := d.Get("user").(string)
 	host := d.Get("host").(string)
 	roles := getRolesFromData(d)
+	preferred_statement := d.Get("use_set_role_statement").(bool)
 
-	if err := alterUserDefaultRoles(ctx, db, user, host, roles); err != nil {
+	if err := alterUserDefaultRoles(ctx, db, user, host, roles, preferred_statement); err != nil {
 		return diag.Errorf("failed to create user default roles: %v", err)
 	}
 
@@ -122,8 +141,9 @@ func UpdateDefaultRoles(ctx context.Context, d *schema.ResourceData, meta interf
 		user := d.Get("user").(string)
 		host := d.Get("host").(string)
 		roles := getRolesFromData(d)
+		preferred_statement := d.Get("use_set_role_statement").(bool)
 
-		if err := alterUserDefaultRoles(ctx, db, user, host, roles); err != nil {
+		if err := alterUserDefaultRoles(ctx, db, user, host, roles, preferred_statement); err != nil {
 			return diag.Errorf("failed to update user default roles: %v", err)
 		}
 	}
@@ -180,8 +200,9 @@ func DeleteDefaultRoles(ctx context.Context, d *schema.ResourceData, meta interf
 
 	user := d.Get("user").(string)
 	host := d.Get("host").(string)
+	preferred_statement := d.Get("use_set_role_statement").(bool)
 
-	if err := alterUserDefaultRoles(ctx, db, user, host, []string{}); err != nil {
+	if err := alterUserDefaultRoles(ctx, db, user, host, []string{}, preferred_statement); err != nil {
 		return diag.Errorf("failed to remove user default roles: %v", err)
 	}
 
